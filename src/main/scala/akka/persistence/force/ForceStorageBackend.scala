@@ -11,6 +11,7 @@ import com.sforce.soap.partner.{DescribeSObjectResult, PartnerConnection}
 import com.sforce.soap.partner.sobject.SObject
 import akka.persistence.common.{KVStorageBackend, StorageException, CommonStorageBackendAccess, CommonStorageBackend}
 import collection.mutable.HashSet
+import com.sforce.async.JobInfo
 
 private[akka] object ForceStorageBackend extends CommonStorageBackend {
 
@@ -95,12 +96,15 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     nameCustomField.setDescription("External ID for akka-persistent " + store + " entries")
     nameCustomField.setExternalId(true)
     nameCustomField.setLength(maxKeyLengthEncoded)
+    nameCustomField.setCaseSensitive(true)
+    nameCustomField.setUnique(true)
     val ownerCustomField = new CustomField
     ownerCustomField.setType(FieldType.Text)
     ownerCustomField.setLabel(metaOwnerName)
     ownerCustomField.setFullName(fullOwnerField)
     ownerCustomField.setDescription("Owning UUID for akka-persistent " + store + " entries")
     ownerCustomField.setLength(maxKeyLengthEncoded)
+    ownerCustomField.setCaseSensitive(true)
     val valueCustomField = new CustomField
     valueCustomField.setType(FieldType.LongTextArea)
     valueCustomField.setLabel(metaValueName)
@@ -119,7 +123,8 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     val fieldMap = Map(nameField -> nameCustomField, ownerField -> ownerCustomField, valueField -> valueCustomField)
 
     def drop() = {
-      wait(_.delete(Array(entry)))
+      connector.getRestConnection.createJob()
+      waitMeta(_.delete(Array(entry)))
       initialized = false
     }
 
@@ -133,7 +138,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
         } catch {
           case e: InvalidSObjectFault => {
             log.warn("%s does not exist, attempting to create", objectName)
-            wait(_.create(Array(entry)))
+            waitMeta(_.create(Array(entry)))
             res = conn.describeSObject(objectName)
           }
         }
@@ -142,7 +147,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
         res.getFields.foreach(field => existingFields.add(field.getName))
         fieldMap.keys.filter(!existingFields.contains(_)).foreach(key => {
           log.debug("%s does not exist, creating", key)
-          wait(_.create(Array(fieldMap(key))))
+          waitMeta(_.create(Array(fieldMap(key))))
         })
 
         initialized = true
@@ -152,7 +157,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
 
-    def wait(block: MetadataConnection => Array[AsyncResult]): Unit = {
+    def waitMeta(block: MetadataConnection => Array[AsyncResult]): Unit = {
       val mconn = connector.getMetadataConnection
       val asyncRes = block(mconn)
       asyncRes.foreach{
@@ -176,12 +181,16 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       }
     }
 
+
+
     def delete(owner: String, key: Array[Byte]) = {
       getSObject(owner, key) match {
         case Some(sobj) => {
           val deleteResults = getConnection.delete(Array(sobj.getField(idField).asInstanceOf[String]))
           deleteResults(0).getSuccess match {
-            case true => ()
+            case true => {
+              log.debug("deleted: owner:%s key%:s".format(sobj.getField(ownerField), sobj.getField(nameField)))
+            }
             case false => {
               deleteResults(0).getErrors.foreach(e => log.error("error deleting sforceId:%s key:%s for owner:%s -> %s".format(sobj.getField(idField).asInstanceOf[String], encodeAndValidateKey(owner, key), owner, e.getMessage)))
               throw new StorageException("unable to deletekey:%s for owner:%s".format(encodeAndValidateKey(owner, key), owner))
@@ -198,13 +207,21 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       obj.setField(nameField, encodeAndValidateKey(owner, key))
       obj.setField(valueField, encodeAndValidateValue(value))
       obj.setField(ownerField, owner)
-      getConnection.upsert(nameField, Array(obj))
+      log.debug("upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(nameField)))
+      val res = getConnection.upsert(nameField, Array(obj))
+      if (!res(0).isSuccess) {
+        res(0).getErrors.foreach{
+          e => log.error("error during upsert:%s", e.getMessage)
+        }
+        throw new StorageException("error during upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(nameField)))
+      }
     }
 
     def get(owner: String, key: Array[Byte], default: Array[Byte]) = {
       getSObject(owner, key) match {
         case Some(sobj) => {
           val value = sobj.getField(valueField)
+          log.debug("found: owner: %s key:%s ".format(sobj.getField(ownerField), sobj.getField(nameField)))
           base64val.decode(value.asInstanceOf[String])
         }
         case None => default
@@ -215,9 +232,9 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       val nameEnc = encodeAndValidateKey(owner, key)
       val records = getConnection.query(getSingleQuery(nameEnc)).getRecords()
       records.size match {
-        case 1 => Some(records(0))
         case 0 => None
-        case _ => throw new StorageException("more than one record found for owner:%s nameEncoded:%s".format(owner, nameEnc))
+        case _ => Some(records(0))
+      //case _ => throw new StorageException("more than one record found for owner:%s nameEncoded:%s".format(owner, nameEnc))
       }
     }
 

@@ -32,5 +32,13 @@ class ForceBasicTestSpec extends WordSpec with MustMatchers {
       ForceStorageBackend.mapAccess.getConnection
       ForceStorageBackend.mapAccess.drop
     }
+
+    "test" in {
+      val enc = ForceStorageBackend.mapAccess.encodeIndexedKey("test", 1234)
+      ForceStorageBackend.mapAccess.decodeIndexedKey("test", enc) must be(1234)
+
+      val encm = ForceStorageBackend.mapAccess.encodeMapKey("test", "mapKey12341234".getBytes)
+      ForceStorageBackend.mapAccess.decodeMapKey("test", encm) must be("mapKey12341234".getBytes)
+    }
   }
 }
