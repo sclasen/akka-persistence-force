@@ -11,7 +11,7 @@ import com.sforce.soap.partner.{DescribeSObjectResult, PartnerConnection}
 import com.sforce.soap.partner.sobject.SObject
 import akka.persistence.common.{KVStorageBackend, StorageException, CommonStorageBackendAccess, CommonStorageBackend}
 import collection.mutable.HashSet
-import com.sforce.async.JobInfo
+
 
 private[akka] object ForceStorageBackend extends CommonStorageBackend {
 
@@ -104,7 +104,6 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     ownerCustomField.setFullName(fullOwnerField)
     ownerCustomField.setDescription("Owning UUID for akka-persistent " + store + " entries")
     ownerCustomField.setLength(maxKeyLengthEncoded)
-    ownerCustomField.setCaseSensitive(true)
     val valueCustomField = new CustomField
     valueCustomField.setType(FieldType.LongTextArea)
     valueCustomField.setLabel(metaValueName)
@@ -123,7 +122,6 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     val fieldMap = Map(nameField -> nameCustomField, ownerField -> ownerCustomField, valueField -> valueCustomField)
 
     def drop() = {
-      connector.getRestConnection.createJob()
       waitMeta(_.delete(Array(entry)))
       initialized = false
     }
@@ -182,7 +180,6 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
 
-
     def delete(owner: String, key: Array[Byte]) = {
       getSObject(owner, key) match {
         case Some(sobj) => {
@@ -239,7 +236,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     def getSingleQuery(ownerKey: String): String = {
-      val query = "select " + idField + ", " + nameField + ", " + valueField + " from " + objectName + " where " + nameField + "='" + ownerKey + "'"
+      val query = "select " + idField + ", " + nameField + ", " + ownerField + ", " + valueField + " from " + objectName + " where " + nameField + "='" + ownerKey + "'"
       log.debug(query)
       query
     }
