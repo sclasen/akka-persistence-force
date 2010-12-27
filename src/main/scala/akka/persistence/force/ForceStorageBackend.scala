@@ -3,15 +3,15 @@ package akka.persistence.force
 import akka.config.Config.config
 import com.salesforce.connector.SFDCServiceConnector
 import com.sforce.ws.ConnectorConfig
-import java.lang.String
 import org.apache.commons.codec.binary.Base64
 import com.sforce.soap.metadata._
 import com.sforce.soap.partner.fault.InvalidSObjectFault
 import com.sforce.soap.partner.{DescribeSObjectResult, PartnerConnection}
 import com.sforce.soap.partner.sobject.SObject
 import akka.persistence.common.{KVStorageBackend, StorageException, CommonStorageBackendAccess, CommonStorageBackend}
-import collection.mutable.HashSet
-
+import java.lang.String
+import collection.mutable.{ArrayBuffer, HashSet}
+import collection.immutable.{HashMap, Iterable => SIIterable}
 
 private[akka] object ForceStorageBackend extends CommonStorageBackend {
 
@@ -69,17 +69,17 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
 
     val custom = "__c"
     val metaObjectName = store + "_entry"
-    val metaOwnerName = "owner"
-    val metaNameName = "name"
+    val metaOwnerName = "owningUUID"
+    val metaKeyName = "key"
     val metaValueName = "value"
 
     val objectName = metaObjectName + custom
     val ownerField = metaOwnerName + custom
-    val nameField = metaNameName + custom
+    val keyField = metaKeyName + custom
     val valueField = metaValueName + custom
     val idField = "Name"
     val fullOwnerField = objectName + "." + metaOwnerName + custom
-    val fullNameField = objectName + "." + metaNameName + custom
+    val fullKeyField = objectName + "." + metaKeyName + custom
     val fullValueField = objectName + "." + metaValueName + custom
 
 
@@ -89,26 +89,28 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     val nameStandardField = new CustomField
     nameStandardField.setType(FieldType.Text)
     nameStandardField.setLabel("Name")
-    val nameCustomField = new CustomField
-    nameCustomField.setType(FieldType.Text)
-    nameCustomField.setLabel(metaNameName)
-    nameCustomField.setFullName(fullNameField)
-    nameCustomField.setDescription("External ID for akka-persistent " + store + " entries")
-    nameCustomField.setExternalId(true)
-    nameCustomField.setLength(maxKeyLengthEncoded)
-    nameCustomField.setCaseSensitive(true)
-    nameCustomField.setUnique(true)
+    val keyCustomField = new CustomField
+    keyCustomField.setType(FieldType.Text)
+    keyCustomField.setLabel(metaKeyName)
+    keyCustomField.setFullName(fullKeyField)
+    keyCustomField.setDescription("Key/External ID for akka-persistent " + store + " entries")
+    keyCustomField.setExternalId(true)
+    keyCustomField.setLength(maxKeyLengthEncoded)
+    keyCustomField.setCaseSensitive(true)
+    keyCustomField.setUnique(true)
+    keyCustomField.setRequired(true)
     val ownerCustomField = new CustomField
     ownerCustomField.setType(FieldType.Text)
     ownerCustomField.setLabel(metaOwnerName)
     ownerCustomField.setFullName(fullOwnerField)
     ownerCustomField.setDescription("Owning UUID for akka-persistent " + store + " entries")
     ownerCustomField.setLength(maxKeyLengthEncoded)
+    ownerCustomField.setRequired(true)
     val valueCustomField = new CustomField
     valueCustomField.setType(FieldType.LongTextArea)
     valueCustomField.setLabel(metaValueName)
     valueCustomField.setFullName(fullValueField)
-    valueCustomField.setDescription("Owning UUID for akka-persistent " + store + " entries")
+    valueCustomField.setDescription("Value for akka-persistent " + store + " entries")
     valueCustomField.setLength(maxValLengthEncoded)
     valueCustomField.setVisibleLines(3)
     var entry: CustomObject = new CustomObject
@@ -119,7 +121,14 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     entry.setPluralLabel(metaObjectName)
     entry.setNameField(nameStandardField)
     entry.setDescription("Custom object for storing akka-persistent " + store + " entries")
-    val fieldMap = Map(nameField -> nameCustomField, ownerField -> ownerCustomField, valueField -> valueCustomField)
+    val fieldMap = Map(keyField -> keyCustomField, ownerField -> ownerCustomField, valueField -> valueCustomField)
+
+    val entryTab = new CustomTab
+    entryTab.setCustomObject(true)
+    entryTab.setFullName(objectName)
+    entryTab.setMobileReady(true)
+    entryTab.setMotif("Custom70: Handsaw")
+
 
     def drop() = {
       waitMeta(_.delete(Array(entry)))
@@ -129,29 +138,44 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     def getConnection(): PartnerConnection = {
       implicit val conn = connector.getConnection
       if (!initialized) {
-        var res: DescribeSObjectResult = null
-        try {
-          res = conn.describeSObject(objectName)
-          log.debug("%s exists".format(objectName))
-        } catch {
-          case e: InvalidSObjectFault => {
-            log.warn("%s does not exist, attempting to create", objectName)
-            waitMeta(_.create(Array(entry)))
-            res = conn.describeSObject(objectName)
-          }
-        }
-
-        var existingFields = new HashSet[String]
-        res.getFields.foreach(field => existingFields.add(field.getName))
-        fieldMap.keys.filter(!existingFields.contains(_)).foreach(key => {
-          log.debug("%s does not exist, creating", key)
-          waitMeta(_.create(Array(fieldMap(key))))
-        })
-
+        initialize
         initialized = true
       }
 
       conn
+    }
+
+    def initialize()(implicit conn: PartnerConnection) = {
+      var res: DescribeSObjectResult = null
+      try {
+        res = conn.describeSObject(objectName)
+        log.debug("%s exists".format(objectName))
+      } catch {
+        case e: InvalidSObjectFault => {
+          log.warn("%s does not exist, attempting to create", objectName)
+          waitMeta(_.create(Array(entry)))
+          res = conn.describeSObject(objectName)
+        }
+      }
+
+      var existingFields = new HashSet[String]
+      res.getFields.foreach(field => existingFields.add(field.getName))
+      fieldMap.keys.filter(!existingFields.contains(_)).foreach(key => {
+        log.debug("%s does not exist, creating", key)
+        waitMeta(_.create(Array(fieldMap(key))))
+      })
+
+
+      if (!conn.describeTabs.exists(res => {
+        res.getTabs.exists(f => {
+          f.getSobjectName == objectName
+        })
+      })) {
+        log.debug("creating tab for %s", objectName)
+        waitMeta(_.create(Array(entryTab)))
+      }
+
+
     }
 
 
@@ -186,7 +210,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
           val deleteResults = getConnection.delete(Array(sobj.getField(idField).asInstanceOf[String]))
           deleteResults(0).getSuccess match {
             case true => {
-              log.debug("deleted: owner:%s key%:s".format(sobj.getField(ownerField), sobj.getField(nameField)))
+              log.trace("deleted: owner:%s key:%s".format(sobj.getField(ownerField), sobj.getField(keyField)))
             }
             case false => {
               deleteResults(0).getErrors.foreach(e => log.error("error deleting sforceId:%s key:%s for owner:%s -> %s".format(sobj.getField(idField).asInstanceOf[String], encodeAndValidateKey(owner, key), owner, e.getMessage)))
@@ -199,46 +223,88 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     def put(owner: String, key: Array[Byte], value: Array[Byte]) = {
-      val obj = new SObject
-      obj.setType(objectName)
-      obj.setField(nameField, encodeAndValidateKey(owner, key))
-      obj.setField(valueField, encodeAndValidateValue(value))
-      obj.setField(ownerField, owner)
-      log.debug("upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(nameField)))
-      val res = getConnection.upsert(nameField, Array(obj))
+      val obj = createSObject(owner, key, value)
+      val res = getConnection.upsert(keyField, Array(obj))
       if (!res(0).isSuccess) {
         res(0).getErrors.foreach{
           e => log.error("error during upsert:%s", e.getMessage)
         }
-        throw new StorageException("error during upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(nameField)))
+        throw new StorageException("error during upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(keyField)))
       }
+    }
+
+    def createSObject(owner: String, key: Array[Byte], value: Array[Byte]) = {
+      val obj = new SObject
+      obj.setType(objectName)
+      obj.setField(keyField, encodeAndValidateKey(owner, key))
+      obj.setField(valueField, encodeAndValidateValue(value))
+      obj.setField(ownerField, owner)
+      log.trace("upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(keyField)))
+      obj
     }
 
     def get(owner: String, key: Array[Byte], default: Array[Byte]) = {
       getSObject(owner, key) match {
         case Some(sobj) => {
           val value = sobj.getField(valueField)
-          log.debug("found: owner: %s key:%s ".format(sobj.getField(ownerField), sobj.getField(nameField)))
-          base64val.decode(value.asInstanceOf[String])
+          log.trace("found: owner: %s key:%s ".format(sobj.getField(ownerField), sobj.getField(keyField)))
+          decodeValue(value.asInstanceOf[String])
         }
         case None => default
       }
     }
 
     def getSObject(owner: String, key: Array[Byte]): Option[SObject] = {
+      val conn = getConnection
       val nameEnc = encodeAndValidateKey(owner, key)
-      val records = getConnection.query(getSingleQuery(nameEnc)).getRecords()
-      records.size match {
-        case 0 => None
-        case _ => Some(records(0))
-      //case _ => throw new StorageException("more than one record found for owner:%s nameEncoded:%s".format(owner, nameEnc))
-      }
+      //we may get multiple records back since the SOQL is case-insensitive, so we have to do the case sensitive match here
+      queryAll(getSingleQuery(nameEnc)).find(r => (r.getField(keyField) == nameEnc))
     }
 
     def getSingleQuery(ownerKey: String): String = {
-      val query = "select " + idField + ", " + nameField + ", " + ownerField + ", " + valueField + " from " + objectName + " where " + nameField + "='" + ownerKey + "'"
-      log.debug(query)
+      val query = initialQueryFragment + "='" + ownerKey + "'"
+      log.trace(query)
       query
+    }
+
+    def getMultiQuery(ownerKeys: Iterable[String]): String = {
+      val inKeys = ownerKeys.reduceLeft[String] {
+        (acc, key) => {
+          acc + "', '" + key
+        }
+      }
+      val query = initialQueryFragment + " IN ('" + inKeys + "')"
+      log.trace(query)
+      query
+    }
+
+    def getMultiQueries(ownerKeys: Iterable[String]): Iterable[String] = {
+      ownerKeys.sliding(200).map(getMultiQuery(_)).toIterable
+    }
+
+    def getAllSObjects(keys: Iterable[String]): ArrayBuffer[SObject] = {
+      val buf = new ArrayBuffer[SObject]
+      val queries = getMultiQueries(keys)
+      queries foreach {
+        buf ++= queryAll(_)
+      }
+      val filterSet = new HashSet() ++= keys
+      buf.filter(sobj => (filterSet.contains(sobj.getField(keyField).asInstanceOf[String])))
+    }
+
+
+    val initialQueryFragment = "select " + idField + ", " + keyField + ", " + ownerField + ", " + valueField + " from " + objectName + " where " + keyField
+
+    def queryAll(query: String): ArrayBuffer[SObject] = {
+      val conn = getConnection
+      var res = conn.query(query)
+      val recordList = new ArrayBuffer[SObject]
+      recordList ++= res.getRecords
+      while (!res.isDone) {
+        res = conn.queryMore(res.getQueryLocator)
+        recordList ++= res.getRecords
+      }
+      recordList
     }
 
 
@@ -251,14 +317,56 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     def encodeAndValidateValue(value: Array[Byte]): String = {
-      val keystr = base64val.encodeToString(value)
-      if (keystr.size > maxValLengthEncoded) {
+      val valstr = base64val.encodeToString(value)
+      if (valstr.size > maxValLengthEncoded) {
         throw new IllegalArgumentException("encoded key was longer than 1024 bytes (or 768 bytes unencoded)")
       }
-      keystr
+      log.trace("encoded->%s", valstr)
+      valstr
     }
 
+    def decodeValue(encoded: String): Array[Byte] = {
+      log.trace("decode encoded->%s", encoded)
+      base64val.decode(encoded)
+    }
 
+    override def deleteAll(owner: String, keys: SIIterable[Array[Byte]]) = {
+      deleteAllSObjects(getAllSObjects(keys.map(encodeAndValidateKey(owner,_))))
+    }
+
+    def deleteAllSObjects(sobjs: Iterable[SObject]) = {
+      getConnection.delete(sobjs.map(_.getField(idField).asInstanceOf[String]).toArray)
+    }
+
+    override def putAll(owner: String, keyValues: SIIterable[(Array[Byte], Array[Byte])]) = {
+      val res = getConnection.upsert(keyField, keyValues.map(kv => (createSObject(owner, kv._1, kv._2))).toArray)
+      res.foreach{
+        result =>
+          if (!result.isSuccess) {
+            result.getErrors.foreach{
+              e => log.error("error during upsert:%s", e.getMessage)
+            }
+            throw new StorageException("error during batch upsert: owner: %s ".format(owner))
+          }
+      }
+    }
+
+    override def getAll(owner: String, keys: SIIterable[Array[Byte]]): Map[Array[Byte], Array[Byte]] = {
+      var keyMap = new HashMap[String, Array[Byte]]
+      keys.foreach{
+        key => {
+          keyMap += encodeAndValidateKey(owner, key) -> key
+        }
+      }
+      var result = new HashMap[Array[Byte], Array[Byte]]
+      //need the filter here to weed out case insensitive matched keys
+      getAllSObjects(keyMap.keys).foreach{
+        sobj => {
+          result += keyMap(sobj.getField(keyField).asInstanceOf[String]) -> decodeValue(sobj.getField(valueField).asInstanceOf[String])
+        }
+      }
+      result
+    }
   }
 
 
