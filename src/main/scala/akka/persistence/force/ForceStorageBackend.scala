@@ -31,7 +31,9 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
   val connector = new SFDCServiceConnector("akka", conConf)
 
   val maxKeyLengthEncoded = 255
+  val maxOwnerKeyLength = 186
   val maxValLengthEncoded = 32000
+  val maxValLength = 24000
   val base64key = new Base64(maxKeyLengthEncoded, Array.empty[Byte], true)
   val base64val = new Base64(maxValLengthEncoded, Array.empty[Byte], true)
 
@@ -290,7 +292,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
         }
       }
       var result = new HashMap[Array[Byte], Array[Byte]]
-      //need the filter here to weed out case insensitive matched keys
+
       getAllSObjects(keyMap.keys).foreach{
         sobj => {
           result += keyMap(sobj.getField(keyField).asInstanceOf[String]) -> decodeValue(sobj.getField(valueField).asInstanceOf[String])
@@ -352,7 +354,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     def encodeAndValidateKey(owner: String, key: Array[Byte]): String = {
       val keystr = base64key.encodeToString(getKey(owner, key))
       if (keystr.size > maxKeyLengthEncoded) {
-        throw new IllegalArgumentException("encoded key was longer than 1024 bytes (or 768 bytes unencoded)")
+        throw new StorageException("encoded owner+key was longer than %d bytes (or %d bytes unencoded)".format(maxKeyLengthEncoded, maxOwnerKeyLength))
       }
       keystr
     }
@@ -360,7 +362,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     def encodeAndValidateValue(value: Array[Byte]): String = {
       val valstr = base64val.encodeToString(value)
       if (valstr.size > maxValLengthEncoded) {
-        throw new IllegalArgumentException("encoded key was longer than 1024 bytes (or 768 bytes unencoded)")
+        throw new StorageException("encoded value was longer than %d bytes (or %d bytes unencoded)".format(maxValLengthEncoded, maxValLength))
       }
       log.trace("encoded->%s", valstr)
       valstr
