@@ -42,7 +42,11 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       log.error(msg)
       throw new IllegalStateException(msg)
     }
-    log.debug("%s -> %s".format(prop, value))
+    if (prop == forcePasswordProp) {
+      log.debug("%s -> %s".format(prop, "***was set***"))
+    } else {
+      log.debug("%s -> %s".format(prop, value))
+    }
     value
   }
 
@@ -331,7 +335,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     override def deleteAll(owner: String, keys: SIIterable[Array[Byte]]) = {
-      deleteAllSObjects(getAllSObjects(keys.map(encodeAndValidateKey(owner,_))))
+      deleteAllSObjects(getAllSObjects(keys.map(encodeAndValidateKey(owner, _))))
     }
 
     def deleteAllSObjects(sobjs: Iterable[SObject]) = {
