@@ -133,6 +133,9 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     entryTab.setMobileReady(true)
     entryTab.setMotif("Custom70: Handsaw")
 
+    val initialQueryFragment = "select " + idField + ", " + keyField + ", " + ownerField + ", " + valueField + " from " + objectName + " where " + keyField
+    val batchRetrievalSize = 200
+
 
     def drop() = {
       waitMeta(_.delete(Array(entry)))
@@ -226,6 +229,14 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       }
     }
 
+    override def deleteAll(owner: String, keys: SIIterable[Array[Byte]]) = {
+      deleteAllSObjects(getAllSObjects(keys.map(encodeAndValidateKey(owner, _))))
+    }
+
+    def deleteAllSObjects(sobjs: Iterable[SObject]) = {
+      getConnection.delete(sobjs.map(_.getField(idField).asInstanceOf[String]).toArray)
+    }
+
     def put(owner: String, key: Array[Byte], value: Array[Byte]) = {
       val obj = createSObject(owner, key, value)
       val res = getConnection.upsert(keyField, Array(obj))
@@ -234,6 +245,19 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
           e => log.error("error during upsert:%s", e.getMessage)
         }
         throw new StorageException("error during upsert: owner: %s key:%s ".format(obj.getField(ownerField), obj.getField(keyField)))
+      }
+    }
+
+    override def putAll(owner: String, keyValues: SIIterable[(Array[Byte], Array[Byte])]) = {
+      val res = getConnection.upsert(keyField, keyValues.map(kv => (createSObject(owner, kv._1, kv._2))).toArray)
+      res.foreach{
+        result =>
+          if (!result.isSuccess) {
+            result.getErrors.foreach{
+              e => log.error("error during upsert:%s", e.getMessage)
+            }
+            throw new StorageException("error during batch upsert: owner: %s ".format(owner))
+          }
       }
     }
 
@@ -256,6 +280,23 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
         }
         case None => default
       }
+    }
+
+    override def getAll(owner: String, keys: SIIterable[Array[Byte]]): Map[Array[Byte], Array[Byte]] = {
+      var keyMap = new HashMap[String, Array[Byte]]
+      keys.foreach{
+        key => {
+          keyMap += encodeAndValidateKey(owner, key) -> key
+        }
+      }
+      var result = new HashMap[Array[Byte], Array[Byte]]
+      //need the filter here to weed out case insensitive matched keys
+      getAllSObjects(keyMap.keys).foreach{
+        sobj => {
+          result += keyMap(sobj.getField(keyField).asInstanceOf[String]) -> decodeValue(sobj.getField(valueField).asInstanceOf[String])
+        }
+      }
+      result
     }
 
     def getSObject(owner: String, key: Array[Byte]): Option[SObject] = {
@@ -283,7 +324,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     def getMultiQueries(ownerKeys: Iterable[String]): Iterable[String] = {
-      ownerKeys.sliding(200).map(getMultiQuery(_)).toIterable
+      ownerKeys.sliding(batchRetrievalSize).map(getMultiQuery(_)).toIterable
     }
 
     def getAllSObjects(keys: Iterable[String]): ArrayBuffer[SObject] = {
@@ -296,9 +337,6 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       buf.filter(sobj => (filterSet.contains(sobj.getField(keyField).asInstanceOf[String])))
     }
 
-
-    val initialQueryFragment = "select " + idField + ", " + keyField + ", " + ownerField + ", " + valueField + " from " + objectName + " where " + keyField
-
     def queryAll(query: String): ArrayBuffer[SObject] = {
       val conn = getConnection
       var res = conn.query(query)
@@ -310,7 +348,6 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       }
       recordList
     }
-
 
     def encodeAndValidateKey(owner: String, key: Array[Byte]): String = {
       val keystr = base64key.encodeToString(getKey(owner, key))
@@ -334,43 +371,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
       base64val.decode(encoded)
     }
 
-    override def deleteAll(owner: String, keys: SIIterable[Array[Byte]]) = {
-      deleteAllSObjects(getAllSObjects(keys.map(encodeAndValidateKey(owner, _))))
-    }
 
-    def deleteAllSObjects(sobjs: Iterable[SObject]) = {
-      getConnection.delete(sobjs.map(_.getField(idField).asInstanceOf[String]).toArray)
-    }
-
-    override def putAll(owner: String, keyValues: SIIterable[(Array[Byte], Array[Byte])]) = {
-      val res = getConnection.upsert(keyField, keyValues.map(kv => (createSObject(owner, kv._1, kv._2))).toArray)
-      res.foreach{
-        result =>
-          if (!result.isSuccess) {
-            result.getErrors.foreach{
-              e => log.error("error during upsert:%s", e.getMessage)
-            }
-            throw new StorageException("error during batch upsert: owner: %s ".format(owner))
-          }
-      }
-    }
-
-    override def getAll(owner: String, keys: SIIterable[Array[Byte]]): Map[Array[Byte], Array[Byte]] = {
-      var keyMap = new HashMap[String, Array[Byte]]
-      keys.foreach{
-        key => {
-          keyMap += encodeAndValidateKey(owner, key) -> key
-        }
-      }
-      var result = new HashMap[Array[Byte], Array[Byte]]
-      //need the filter here to weed out case insensitive matched keys
-      getAllSObjects(keyMap.keys).foreach{
-        sobj => {
-          result += keyMap(sobj.getField(keyField).asInstanceOf[String]) -> decodeValue(sobj.getField(valueField).asInstanceOf[String])
-        }
-      }
-      result
-    }
   }
 
 
