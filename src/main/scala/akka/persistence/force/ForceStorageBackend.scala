@@ -145,16 +145,16 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     def getConnection(): PartnerConnection = {
-      implicit val conn = connector.getConnection
+      val conn = connector.getConnection
       if (!initialized) {
-        initialize
+        initialize(conn)
         initialized = true
       }
 
       conn
     }
 
-    def initialize()(implicit conn: PartnerConnection) = {
+    def initialize(conn: PartnerConnection) = {
       var res: DescribeSObjectResult = null
       try {
         res = conn.describeSObject(objectName)
@@ -236,6 +236,7 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     }
 
     def deleteAllSObjects(sobjs: Iterable[SObject]) = {
+      //need success check
       getConnection.delete(sobjs.map(_.getField(idField).asInstanceOf[String]).toArray)
     }
 
