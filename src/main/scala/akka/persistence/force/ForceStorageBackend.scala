@@ -84,9 +84,9 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
     val keyField = metaKeyName + custom
     val valueField = metaValueName + custom
     val idField = "Name"
-    val fullOwnerField = objectName + "." + metaOwnerName + custom
-    val fullKeyField = objectName + "." + metaKeyName + custom
-    val fullValueField = objectName + "." + metaValueName + custom
+    val fullOwnerField = objectName + "." + ownerField
+    val fullKeyField = objectName + "." + keyField
+    val fullValueField = objectName + "." + valueField
 
 
     var initialized = false
