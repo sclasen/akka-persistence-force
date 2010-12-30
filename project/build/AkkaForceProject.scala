@@ -37,4 +37,10 @@ class AkkaForceProject(info: ProjectInfo) extends DefaultProject(info) {
   val scalatest = "org.scalatest" % "scalatest" % SCALATEST_VERSION % TEST
 
 
+ // publishing
+  override def managedStyle = ManagedStyle.Maven
+  //override def defaultPublishRepository = Some(Resolver.file("maven-local", Path.userHome / ".m2" / "repository" asFile))
+  val publishTo = Resolver.file("maven-local", Path.userHome / ".m2" / "repository" asFile)
+
+
 }
