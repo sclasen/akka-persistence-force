@@ -10,9 +10,9 @@ class AkkaForceProject(info: ProjectInfo) extends DefaultProject(info) {
   val LocalMavenRepo       = MavenRepository("Local Maven Repo", (Path.userHome / ".m2" / "repository").asURL.toString)
 
 
-  lazy val AKKA_VERSION = "1.1-SNAPSHOT"
-  lazy val FORCE_API_VERSION = "20.0.0"
-  lazy val FORCE_SDK_VERSION = "20.0.0"
+  lazy val AKKA_VERSION = "1.0"
+  lazy val FORCE_API_VERSION = "21.0.0"
+  lazy val FORCE_SDK_VERSION = "21.0.0-BETA"
   lazy val SCALATEST_VERSION = "1.2"
   lazy val CODEC_VERSION = "1.4"
   lazy val FORCE_API_GROUP = "com.force.api"

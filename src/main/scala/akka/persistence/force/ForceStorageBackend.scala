@@ -2,7 +2,7 @@ package akka.persistence.force
 
 import akka.config.Config.config
 import com.force.sdk.connector.ForceServiceConnector
-import com.sforce.ws.ConnectorConfig
+import com.force.sdk.connector.ForceConnectorConfig
 import org.apache.commons.codec.binary.Base64
 import com.sforce.soap.metadata._
 import com.sforce.soap.partner.fault.InvalidSObjectFault
@@ -23,12 +23,12 @@ private[akka] object ForceStorageBackend extends CommonStorageBackend {
   val forcePassword = getConfigOrFail(forcePasswordProp)
   val forceEndpoint = getConfigOrFail(forceEndpointProp) + "/services/Soap/u/20"
 
-  val conConf = new ConnectorConfig
+  val conConf = new ForceConnectorConfig()
   conConf.setUsername(forceUser)
   conConf.setPassword(forcePassword)
   conConf.setAuthEndpoint(forceEndpoint)
 
-  val connector = new ForceServiceConnector("akka", conConf)
+  val connector = new ForceServiceConnector(conConf)
 
   val maxKeyLengthEncoded = 255
   val maxOwnerKeyLength = 186
